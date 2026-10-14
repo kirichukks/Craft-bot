@@ -1,50 +1,61 @@
+import http.server
 import os
-from threading import Thread
+import socketserver
+import threading
 import telebot
-from flask import Flask
 from supabase import create_client, Client
 
-# --- 1. МИНИ-СЕРВЕР ДЛЯ RENDER (ЧТОБЫ БОТ НЕ ЗАСЫПАЛ) ---
-app = Flask('')
+# --- 1. ВЕБ-СЕРВЕР ДЛЯ RENDER (ФИКС ОШИБКИ NO OPEN PORTS) ---
+PORT = int(os.environ.get('PORT', 10000))
 
 
-@app.route('/')
-def home():
-  return 'CRAFT POS Bot is alive and running!', 200
+class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
+
+  def do_GET(self):
+    self.send_response(200)
+    self.send_header('Content-type', 'text/html; charset=utf-8')
+    self.end_headers()
+    self.wfile.write(b'CRAFT POS Bot is alive and running!')
+
+  def log_message(self, format, *args):
+    # Отключаем спам в логах от пинг-запросов
+    return
 
 
-def run_web():
-  port = int(os.environ.get('PORT', 8080))
-  app.run(host='0.0.0.0', port=port)
+def start_health_check_server():
+  try:
+    with socketserver.TCPServer(('0.0.0.0', PORT), HealthCheckHandler) as httpd:
+      print(f'Веб-сервер успешно запущен на порту {PORT}')
+      httpd.serve_forever()
+  except Exception as e:
+    print(f'Ошибка запуска веб-сервера: {e}')
 
 
-Thread(target=run_web).daemon = True
-# ---------------------------------------------------------
+# Запускаем веб-сервер в отдельном потоке
+web_thread = threading.Thread(target=start_health_check_server, daemon=True)
+web_thread.start()
 
-# --- 2. КОНФИГУРАЦИЯ БОТА И БАЗЫ ДАННЫХ ---
+# --- 2. КОНФИГУРАЦИЯ БОТА И SUPABASE ---
 TOKEN = '8701487976:AAGCfF3R539D4Q3il0DpXStrEi3APfMOw8U'
 bot = telebot.TeleBot(TOKEN)
 
-# Список ID администраторов (Вы и Лили)
+# Список администраторов (Вы и Лили)
 ADMIN_IDS = [8449487962, 399806055]
 
-# Данные Supabase (замените на ваши актуальные ключи, если они отличаются)
-SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://lufsjsvsekknomjvachk.supabase.co')
-SUPABASE_KEY = os.environ.get(
-    'SUPABASE_KEY',
-    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...',  # Укажите ваш секретный ключ Supabase, если не задан в переменных окружения Render
+# Данные Supabase
+SUPABASE_URL = os.environ.get(
+    'SUPABASE_URL', 'https://lufsjsvsekknomjvachk.supabase.co'
 )
+SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 
-# Инициализация клиента Supabase (если ключи заданы)
 supabase: Client = None
-try:
-  if SUPABASE_URL and SUPABASE_KEY:
+if SUPABASE_URL and SUPABASE_KEY:
+  try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-  print(f'Ошибка подключения к Supabase: {e}')
+  except Exception as e:
+    print(f'Предупреждение: Supabase не инициализирован: {e}')
 
 
-# Проверка на администратора
 def is_admin(user_id):
   return user_id in ADMIN_IDS
 
@@ -53,42 +64,30 @@ def is_admin(user_id):
 
 
 @bot.message_handler(commands=['start'])
-def send_welcome(user_message):
-  user_id = user_message.from_user.id
+def send_welcome(message):
+  user_id = message.from_user.id
   if not is_admin(user_id):
-    bot.reply_to(
-        user_message,
-        '⛔ У вас нет доступа к управлению кофейней CRAFT. Запрос на доступ'
-        ' отправлен администраторам.',
-    )
-    # Можно отправить уведомление админам о попытке входа
-    for admin_id in ADMIN_IDS:
-      try:
-        bot.send_message(
-            admin_id,
-            f'⚠️ Пользователь @{user_message.from_user.username} (ID:'
-            f' `{user_id}`) попытался запустить бота.',
-            parse_mode='Markdown',
-        )
-      except:
-        pass
+    bot.reply_to(message, '⛔ У вас нет доступа к управлению кофейней CRAFT.')
     return
 
   bot.reply_to(
-      user_message,
+      message,
       '☕ Приветствую в системе управления кофейней **CRAFT**!\nДоступ'
-      ' разрешен ✅.\n\nИспользуйте команды для работы с категориями и товарами.',
+      ' разрешен ✅.\n\nИспользуйте /categories для просмотра меню.',
       parse_mode='Markdown',
   )
 
 
 @bot.message_handler(commands=['categories'])
-def show_categories(user_message):
-  if not is_admin(user_message.from_user.id):
+def show_categories(message):
+  if not is_admin(message.from_user.id):
     return
 
   if not supabase:
-    bot.reply_to(user_message, '❌ База данных Supabase не подключена.')
+    bot.reply_to(
+        message,
+        '⚠️ Переменная SUPABASE_KEY не задана в настройках Render Environment.',
+    )
     return
 
   try:
@@ -96,28 +95,26 @@ def show_categories(user_message):
     categories = response.data
 
     if not categories:
-      bot.reply_to(user_message, '📭 Список категорий пока пуст.')
+      bot.reply_to(message, '📭 Список категорий пуст.')
       return
 
     text = '📋 **Категории товаров в CRAFT:**\n\n'
     for cat in categories:
-      # Настройте поля под структуру вашей таблицы (например, name или title)
       cat_name = cat.get('name', cat.get('title', 'Без названия'))
       text += f'• {cat_name}\n'
 
-    bot.reply_to(user_message, text, parse_mode='Markdown')
+    bot.reply_to(message, text, parse_mode='Markdown')
   except Exception as e:
-    bot.reply_to(user_message, f'❌ Ошибка при получении категорий: {e}')
+    bot.reply_to(message, f'❌ Ошибка БД: {e}')
 
 
 @bot.message_handler(func=lambda message: True)
-def echo_all(user_message):
-  if not is_admin(user_message.from_user.id):
-    return
-  bot.reply_to(
-      user_message,
-      'Используйте команды для управления, например /categories',
-  )
+def echo_all(message):
+  if is_admin(message.from_user.id):
+    bot.reply_to(
+        message,
+        'Используйте команды управления (например, /start или /categories).',
+    )
 
 
 # --- 4. ЗАПУСК БОТА ---
