@@ -1,228 +1,285 @@
 import datetime
-import http.server
 import os
-import socketserver
-import threading
 import telebot
 from telebot import types
 from supabase import create_client, Client
 
-# --- 1. ВЕБ-СЕРВЕР ДЛЯ RENDER ---
-PORT = int(os.environ.get('PORT', 10000))
+# Получаем ключи и настройки из переменных окружения Render
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+WEBAPP_URL = os.environ.get("WEBAPP_URL", "https://craft-pos-mobile.vercel.app")
+SUPER_ADMIN_ID = 8449487962  # Ваш hardcoded super-admin ID
 
-class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.send_header('Content-type', 'text/html; charset=utf-8')
-        self.end_headers()
-        self.wfile.write(b'CRAFT POS Bot is alive and running!')
-    def log_message(self, format, *args):
-        return
+bot = telebot.TeleBot(TELEGRAM_TOKEN)
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-def start_health_check_server():
-    try:
-        with socketserver.TCPServer(("0.0.0.0", PORT), HealthCheckHandler) as httpd:
-            httpd.serve_forever()
-    except Exception as e:
-        print(f"Ошибка веб-сервера: {e}")
 
-threading.Thread(target=start_health_check_server, daemon=True).start()
+def is_admin(user_id):
+  if user_id == SUPER_ADMIN_ID:
+    return True
+  try:
+    res = (
+        supabase.table("users")
+        .select("role")
+        .eq("telegram_id", user_id)
+        .execute()
+    )
+    if res.data and res.data[0].get("role") in ["admin", "owner"]:
+      return True
+  except Exception as e:
+    print(f"Error checking admin: {e}")
+  return False
 
-# --- 2. ИНИЦИАЛИЗАЦИЯ ---
-TOKEN = '8701487976:AAGCfF3R539D4Q3il0DpXStrEi3APfMOw8U'
-bot = telebot.TeleBot(TOKEN)
 
-# Ваш Главный Telegram ID (вечный админ)
-SUPER_ADMIN_ID = 8449487962 
+@bot.message_handler(commands=["start"])
+def handle_start(message):
+  user = message.from_user
+  telegram_id = user.id
+  username = user.username or user.first_name
 
-SUPABASE_URL = 'https://lufsjsvsekknomjvachk.supabase.co'
-SUPABASE_KEY = 'sb_publishable_oVdER-aUXCAcpcJ5VMIUHw_xZ2n4NCa'
+  # Автоочистка неактивных пользователей (старше 7 дней, у которых статус pending)
+  try:
+    limit_date = (
+        datetime.datetime.now(datetime.timezone.utc)
+        - datetime.timedelta(days=7)
+    ).isoformat()
+    supabase.table("users").delete().eq("status", "pending").lt(
+        "last_active", limit_date
+    ).execute()
+  except Exception as e:
+    print(f"Cleanup error: {e}")
 
-supabase: Client = None
-try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-except Exception as e:
-    print(f"Ошибка Supabase: {e}")
+  # Проверяем наличие пользователя в базе
+  try:
+    res = (
+        supabase.table("users")
+        .select("*")
+        .eq("telegram_id", telegram_id)
+        .execute()
+    )
 
-# Функция автоочистки неактивных пользователей (> 7 дней)
-def cleanup_inactive_users():
-    if not supabase:
-        return
-    try:
-        limit_date = (datetime.datetime.utcnow() - datetime.timedelta(days=7)).isoformat()
-        supabase.table('users').delete().neq('telegram_id', SUPER_ADMIN_ID).lt('last_active', limit_date).execute()
-    except Exception as e:
-        print(f"Ошибка при автоочистке пользователей: {e}")
-
-# --- 3. ОБРАБОТЧИКИ КОМАНД ---
-@bot.message_handler(commands=['start'])
-def send_welcome(message):
-    user_id = message.from_user.id
-    username = message.from_user.username or "Без юзернейма"
-    full_name = f"{message.from_user.first_name or ''} {message.from_user.last_name or ''}".strip()
-
-    cleanup_inactive_users()
-
-    if user_id == SUPER_ADMIN_ID:
-        markup = types.InlineKeyboardMarkup()
-        web_app_url = 'https://craft-pos-mobile.vercel.app'
-        markup.add(types.InlineKeyboardButton(text="📱 Открыть CRAFT POS (Склад и Техкарты)", web_app=types.WebAppInfo(url=web_app_url)))
-        
-        bot.send_message(message.chat.id, "👋 Приветствую, Шеф! Доступ полный ✅.\n\nКоманды для управления:\n/users — меню управления пользователями", reply_markup=markup)
-        update_user_activity(user_id, username, full_name, 'approved')
-        return
-
-    if supabase:
-        try:
-            res = supabase.table('users').select('*').eq('telegram_id', user_id).execute()
-            user_data = res.data
-        except Exception:
-            user_data = []
-
-        if user_data and user_data[0].get('status') == 'approved':
-            update_user_activity(user_id, username, full_name, 'approved')
-            
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton(text="📱 Открыть CRAFT POS", web_app=types.WebAppInfo(url='https://craft-pos-mobile.vercel.app')))
-            bot.send_message(message.chat.id, "✅ Доступ разрешен.", reply_markup=markup)
-        else:
-            update_user_activity(user_id, username, full_name, 'pending')
-            
-            bot.send_message(
-                message.chat.id, 
-                "⏳ Вашего доступа нет в системе или срок его действия истек (не заходили более 7 дней).\nЗапрос отправлен главному администратору. Ожидайте подтверждения."
-            )
-
-            markup = types.InlineKeyboardMarkup(row_width=2)
-            btn_allow = types.InlineKeyboardButton("✅ Разрешить", callback_data=f"allow_{user_id}")
-            btn_deny = types.InlineKeyboardButton("❌ Отклонить", callback_data=f"deny_{user_id}")
-            markup.add(btn_allow, btn_deny)
-
-            bot.send_message(
-                SUPER_ADMIN_ID, 
-                f"🔔 **Новый запрос на доступ в CRAFT POS!**\n\nИмя: {full_name}\nUsername: @{username}\nID: `{user_id}`",
-                reply_markup=markup,
-                parse_mode="Markdown"
-            )
-
-def update_user_activity(user_id, username, full_name, status):
-    if not supabase:
-        return
-    try:
-        supabase.table('users').upsert({
-            'telegram_id': user_id,
-            'username': username,
-            'full_name': full_name,
-            'status': status,
-            'last_active': datetime.datetime.utcnow().isoformat()
+    if telegram_id == SUPER_ADMIN_ID:
+      # Супер-админ всегда имеет полный доступ
+      if not res.data:
+        supabase.table("users").insert({
+            "telegram_id": telegram_id,
+            "username": username,
+            "status": "approved",
+            "role": "owner",
+            "last_active": datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat(),
         }).execute()
-    except Exception as e:
-        print(f"Ошибка обновления пользователя: {e}")
+      else:
+        supabase.table("users").update({
+            "last_active": datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat()
+        }).eq("telegram_id", telegram_id).execute()
 
-# Интерактивное меню пользователей: /users
-@bot.message_handler(commands=['users'])
-def list_users(message):
-    if message.from_user.id != SUPER_ADMIN_ID:
-        return
-    if not supabase:
-        bot.reply_to(message, "⚠️ Ошибка БД.")
-        return
+      markup = types.InlineKeyboardMarkup()
+      markup.add(
+          types.InlineKeyboardButton(
+              "📱 Открыть CRAFT POS (Склад и Техкарты)",
+              web_app=types.WebAppInfo(url=WEBAPP_URL),
+          )
+      )
+      bot.send_message(
+          message.chat.id,
+          "👋 Приветствую, Шеф! Доступ полный ✅.\n\nКоманды для управления:\n/users"
+          " — меню управления пользователями",
+          reply_markup=markup,
+      )
+      return
 
-    try:
-        res = supabase.table('users').select('*').execute()
-        users = res.data
-        if not users:
-            bot.reply_to(message, "📭 Список пользователей пуст.")
-            return
+    if not res.data:
+      # Новий користувач — додаємо зі статусом pending
+      supabase.table("users").insert({
+          "telegram_id": telegram_id,
+          "username": username,
+          "status": "pending",
+          "role": "staff",
+          "last_active": datetime.datetime.now(
+              datetime.timezone.utc
+          ).isoformat(),
+      }).execute()
 
-        for u in users:
-            uid = u.get('telegram_id')
-            name = u.get('full_name') or "Без имени"
-            uname = u.get('username') or "нет"
-            status = u.get('status')
+      # Сповіщаємо адміна
+      admin_markup = types.InlineKeyboardMarkup()
+      admin_markup.row(
+          types.InlineKeyboardButton(
+              "✅ Разрешить", callback_data=f"approve_{telegram_id}"
+          ),
+          types.InlineKeyboardButton(
+              "❌ Отклонить", callback_data=f"reject_{telegram_id}"
+          ),
+      )
+      bot.send_message(
+          SUPER_ADMIN_ID,
+          f"🔔 **Новая заявка на доступ!**\nПользователь: @{username}"
+          f" (ID: `{telegram_id}`)",
+          reply_markup=admin_markup,
+          parse_mode="Markdown",
+      )
 
-            if uid == SUPER_ADMIN_ID:
-                continue
+      bot.send_message(
+          message.chat.id,
+          "⏳ Ваша заявка отправлена администратору. Ожидайте подтверждения.",
+      )
+    else:
+      user_data = res.data[0]
+      status = user_data.get("status")
 
-            text = f"👤 **{name}** (@{uname})\n🆔 ID: `{uid}`\n📌 Статус: `{status}`"
-            
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton(f"🗑 Удалить {name}", callback_data=f"del_{uid}"))
-            
-            bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='Markdown')
+      # Оновлюємо час останньої активності
+      supabase.table("users").update({
+          "last_active": datetime.datetime.now(datetime.timezone.utc).isoformat()
+      }).eq("telegram_id", telegram_id).execute()
 
-        bot.send_message(message.chat.id, "📋 Список сотрудников выше. Для удаления просто нажмите кнопку под карточкой.")
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
+      if status == "approved":
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "📱 Открыть CRAFT POS (Склад и Техкарты)",
+                web_app=types.WebAppInfo(url=WEBAPP_URL),
+            )
+        )
+        bot.send_message(
+            message.chat.id,
+            "✅ Доступ подтвержден! Нажмите кнопку ниже для открытия системы:",
+            reply_markup=markup,
+        )
+      elif status == "pending":
+        bot.send_message(
+            message.chat.id,
+            "⏳ Ваша заявка находится на рассмотрении у администратора.",
+        )
+      else:
+        bot.send_message(message.chat.id, "❌ Доступ к системе отклонен.")
 
-# Обработка нажатий на все кнопки (Разрешить, Отклонить, Удалить)
+  except Exception as e:
+    print(f"Start command error: {e}")
+    bot.send_message(
+        message.chat.id, "⚠️ Произошла ошибка при подключении к базе данных."
+    )
+
+
+@bot.message_handler(commands=["users"])
+def handle_users_menu(message):
+  if not is_admin(message.from_user.id):
+    bot.send_message(message.chat.id, "⛔ У вас нет прав для этой команды.")
+    return
+
+  try:
+    res = supabase.table("users").select("*").execute()
+    users = res.data
+    if not users:
+      bot.send_message(message.chat.id, "📭 Список пользователей пуст.")
+      return
+
+    for u in users:
+      uid = u.get("telegram_id")
+      uname = u.get("username", "Unknown")
+      status = u.get("status", "unknown")
+      role = u.get("role", "staff")
+
+      text = (
+          f"👤 **{uname}**\nID: `{uid}`\nСтатус: `{status}`\nРоль: `{role}`"
+      )
+      markup = types.InlineKeyboardMarkup()
+
+      if status == "pending":
+        markup.row(
+            types.InlineKeyboardButton(
+                "✅ Разрешить", callback_data=f"approve_{uid}"
+            ),
+            types.InlineKeyboardButton(
+                "❌ Отклонить", callback_data=f"reject_{uid}"
+            ),
+        )
+      else:
+        markup.add(
+            types.InlineKeyboardButton("🗑 Удалить", callback_data=f"delete_{uid}")
+        )
+
+      bot.send_message(
+          message.chat.id, text, reply_markup=markup, parse_mode="Markdown"
+      )
+  except Exception as e:
+    print(f"Users menu error: {e}")
+    bot.send_message(message.chat.id, "⚠️ Ошибка при загрузке пользователей.")
+
+
+# Универсальный обработчик всех нажатий инлайн-кнопок
 @bot.callback_query_handler(func=lambda call: True)
 def handle_callbacks(call):
-    if call.from_user.id != SUPER_ADMIN_ID:
-        bot.answer_callback_query(call.id, "У вас нет прав.")
-        return
+  data = call.data
+  try:
+    if data.startswith("approve_"):
+      target_id = int(data.split("_")[1])
+      supabase.table("users").update({"status": "approved"}).eq(
+          "telegram_id", target_id
+      ).execute()
+      bot.answer_callback_query(call.id, "Пользователь одобрен ✅")
+      bot.edit_message_text(
+          f"{call.message.text}\n\n✅ **СТАТУС: ОДОБРЕНО**",
+          call.message.chat.id,
+          call.message.message_id,
+          parse_mode="Markdown",
+      )
+      # Уведомляем самого пользователя
+      try:
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton(
+                "📱 Открыть CRAFT POS (Склад и Техкарты)",
+                web_app=types.WebAppInfo(url=WEBAPP_URL),
+            )
+        )
+        bot.send_message(
+            target_id,
+            "🎉 Ваш доступ одобрен! Нажмите кнопку ниже для открытия склада:",
+            reply_markup=markup,
+        )
+      except Exception:
+        pass
 
-    data = call.data
+    elif data.startswith("reject_"):
+      target_id = int(data.split("_")[1])
+      supabase.table("users").update({"status": "rejected"}).eq(
+          "telegram_id", target_id
+      ).execute()
+      bot.answer_callback_query(call.id, "Доступ отклонен ❌")
+      bot.edit_message_text(
+          f"{call.message.text}\n\n❌ **СТАТУС: ОТКЛОНЕНО**",
+          call.message.chat.id,
+          call.message.message_id,
+          parse_mode="Markdown",
+      )
+      try:
+        bot.send_message(
+            target_id, "❌ К сожалению, ваш запрос на доступ был отклонен."
+        )
+      except Exception:
+        pass
 
-    if data.startswith('allow_'):
-        target_id = int(data.split('_')[1])
-        try:
-            supabase.table('users').update({'status': 'approved'}).eq('telegram_id', target_id).execute()
-            bot.answer_callback_query(call.id, "Доступ разрешен!")
-            bot.edit_message_text(f"✅ Доступ для пользователя `{target_id}` **разрешен**.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
-            
-            markup = types.InlineKeyboardMarkup()
-            markup.add(types.InlineKeyboardButton(text="📱 Открыть CRAFT POS", web_app=types.WebAppInfo(url='https://craft-pos-mobile.vercel.app')))
-            bot.send_message(target_id, "🎉 Администратор одобрил ваш доступ! Нажмите кнопку ниже для входа:", reply_markup=markup)
-        except Exception as e:
-            bot.answer_callback_query(call.id, f"Ошибка: {e}")
+    elif data.startswith("delete_"):
+      target_id = int(data.split("_")[1])
+      supabase.table("users").delete().eq(
+          "telegram_id", target_id
+      ).execute()
+      bot.answer_callback_query(call.id, "Пользователь удален 🗑")
+      bot.edit_message_text(
+          f"{call.message.text}\n\n🗑 **УДАЛЕНО**",
+          call.message.chat.id,
+          call.message.message_id,
+          parse_Mode="Markdown",
+      )
+  except Exception as e:
+    print(f"Callback error: {e}")
+    bot.answer_callback_query(call.id, "⚠️ Произошла ошибка.")
 
-    elif data.startswith('deny_'):
-        target_id = int(data.split('_')[1])
-        try:
-            supabase.table('users').update({'status': 'blocked'}).eq('telegram_id', target_id).execute()
-            bot.answer_callback_query(call.id, "Доступ отклонен.")
-            bot.edit_message_text(f"❌ Доступ для пользователя `{target_id}` **отклонен**.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
-            bot.send_message(target_id, "⛔ Администратор отклонил ваш запрос на доступ.")
-        except Exception as e:
-            bot.answer_callback_query(call.id, f"Ошибка: {e}")
 
-    elif data.startswith('del_'):
-        target_id = int(data.split('_')[1])
-        try:
-            supabase.table('users').delete().eq('telegram_id', target_id).execute()
-            bot.answer_callback_query(call.id, "Пользователь удален.")
-            bot.edit_message_text(f"🗑 Пользователь с ID `{target_id}` **удален** из системы.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
-            
-            try:
-                bot.send_message(target_id, "⛔ Ваш доступ к CRAFT POS был отозван администратором.")
-            except Exception:
-                pass
-        except Exception as e:
-            bot.answer_callback_query(call.id, f"Ошибка: {e}")
-
-@bot.message_handler(commands=['categories'])
-def show_categories(message):
-    if message.from_user.id != SUPER_ADMIN_ID:
-        return
-    if not supabase:
-        bot.reply_to(message, "⚠️ Ошибка БД.")
-        return
-
-    try:
-        response = supabase.table('categories').select('*').execute()
-        categories = response.data
-        if not categories:
-            bot.reply_to(message, "📭 Список пуст.")
-            return
-
-        text = "📋 **Категории товаров в CRAFT:**\n\n"
-        for cat in categories:
-            text += f"• {cat.get('name', cat.get('title', 'Без названия'))}\n"
-        bot.reply_to(message, text, parse_mode='Markdown')
-    except Exception as e:
-        bot.reply_to(message, f"❌ Ошибка: {e}")
-
-if __name__ == '__main__':
-    print("Бот с интерактивным меню запущен...")
-    bot.infinity_polling(skip_pending=True)
+if __name__ == "__main__":
+  print("Bot started successfully...")
+  bot.infinity_polling()
