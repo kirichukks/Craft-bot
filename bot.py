@@ -6,7 +6,7 @@ import telebot
 from telebot import types
 from supabase import create_client, Client
 
-# --- 1. ВЕБ-СЕРВЕР ДЛЯ RENDER (ОТКРЫТИЕ ПОРТА) ---
+# --- 1. ВЕБ-СЕРВЕР ДЛЯ RENDER ---
 PORT = int(os.environ.get('PORT', 10000))
 
 class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
@@ -15,29 +15,24 @@ class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
         self.send_header('Content-type', 'text/html; charset=utf-8')
         self.end_headers()
         self.wfile.write(b'CRAFT POS Bot is alive and running!')
-
     def log_message(self, format, *args):
         return
 
 def start_health_check_server():
     try:
         with socketserver.TCPServer(("0.0.0.0", PORT), HealthCheckHandler) as httpd:
-            print(f"Веб-сервер успешно запущен на порту {PORT}")
             httpd.serve_forever()
     except Exception as e:
-        print(f"Ошибка запуска веб-сервера: {e}")
+        print(f"Ошибка веб-сервера: {e}")
 
-web_thread = threading.Thread(target=start_health_check_server, daemon=True)
-web_thread.start()
+threading.Thread(target=start_health_check_server, daemon=True).start()
 
-# --- 2. КОНФИГУРАЦИЯ БОТА И SUPABASE ---
+# --- 2. ИНИЦИАЛИЗАЦИЯ И КЛЮЧИ ---
 TOKEN = '8701487976:AAGCfF3R539D4Q3il0DpXStrEi3APfMOw8U'
 bot = telebot.TeleBot(TOKEN)
-
-# Список администраторов (Вы и Лили)
 ADMIN_IDS = [8449487962, 399806055]
 
-# Данные Supabase
+# Ключи встроены напрямую
 SUPABASE_URL = 'https://lufsjsvsekknomjvachk.supabase.co'
 SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1ZnNqc3ZzZWtrbm9tanZhY2hrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgzNjY4MzUsImV4cCI6MjA3Mzk0MjgzNX0.WJm1bH-411eE5aE9-xN80e7U2k2d3l8m9p0q1r2s3t4'
 
@@ -45,41 +40,32 @@ supabase: Client = None
 try:
     supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 except Exception as e:
-    print(f"Ошибка инициализации Supabase: {e}")
+    print(f"Ошибка Supabase: {e}")
 
 def is_admin(user_id):
     return user_id in ADMIN_IDS
 
-# --- 3. ОБРАБОТЧИКИ КОМАНД ---
+# --- 3. КОМАНДЫ ---
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
-    user_id = message.from_user.id
-    if not is_admin(user_id):
-        bot.reply_to(message, "⛔ У вас нет доступа к управлению кофейней CRAFT.")
+    if not is_admin(message.from_user.id):
+        bot.reply_to(message, "⛔ У вас нет доступа.")
         return
 
-    # Создаем клавиатуру с WebApp кнопкой (как на вашем скриншоте)
     markup = types.InlineKeyboardMarkup()
-    # Замените заглушку https://your-webapp-url.com на ссылку на ваш веб-интерфейс (например, на Vercel), если он у вас есть
-    web_app_url = os.environ.get('WEBAPP_URL', 'https://craft-pos.vercel.app') 
-    
-    webapp = types.WebAppInfo(url=web_app_url)
-    markup.add(types.InlineKeyboardButton(text="📱 Открыть CRAFT POS (Склад и Техкарты)", web_app=webapp))
+    web_app_url = 'https://craft-pos.vercel.app'
+    markup.add(types.InlineKeyboardButton(text="📱 Открыть CRAFT POS (Склад и Техкарты)", web_app=types.WebAppInfo(url=web_app_url)))
 
     text = (
         "👋 Добро пожаловать в CRAFT Bar Manager!\n\n"
-        "Нажмите на кнопку ниже, чтобы открыть интерактивную панель управления. "
-        "В ней вы сможете изменять цены, редактировать и удалять позиции со склада "
-        "и из техкарт прямо с телефона:"
+        "Нажмите на кнопку ниже, чтобы открыть панель управления:"
     )
-    
     bot.send_message(message.chat.id, text, reply_markup=markup)
 
 @bot.message_handler(commands=['categories'])
 def show_categories(message):
     if not is_admin(message.from_user.id):
         return
-
     if not supabase:
         bot.reply_to(message, "⚠️ Ошибка подключения к базе данных.")
         return
@@ -106,7 +92,6 @@ def echo_all(message):
     if is_admin(message.from_user.id):
         bot.reply_to(message, "Используйте /start для вызова панели управления.")
 
-# --- 4. ЗАПУСК БОТА ---
 if __name__ == '__main__':
-    print("Бот управления кофейней CRAFT запущен и готов к работе...")
+    print("Бот запущен...")
     bot.infinity_polling(skip_pending=True)
