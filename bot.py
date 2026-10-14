@@ -32,7 +32,6 @@ TOKEN = '8701487976:AAGCfF3R539D4Q3il0DpXStrEi3APfMOw8U'
 bot = telebot.TeleBot(TOKEN)
 ADMIN_IDS = [8449487962, 399806055]
 
-# Ключи встроены напрямую
 SUPABASE_URL = 'https://lufsjsvsekknomjvachk.supabase.co'
 SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1ZnNqc3ZzZWtrbm9tanZhY2hrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgzNjY4MzUsImV4cCI6MjA3Mzk0MjgzNX0.WJm1bH-411eE5aE9-xN80e7U2k2d3l8m9p0q1r2s3t4'
 
@@ -53,7 +52,8 @@ def send_welcome(message):
         return
 
     markup = types.InlineKeyboardMarkup()
-    web_app_url = 'https://craft-pos.vercel.app'
+    # Установлен правильный рабочий адрес WebApp
+    web_app_url = 'https://craft-pos-mobile.vercel.app'
     markup.add(types.InlineKeyboardButton(text="📱 Открыть CRAFT POS (Склад и Техкарты)", web_app=types.WebAppInfo(url=web_app_url)))
 
     text = (
