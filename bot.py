@@ -5,7 +5,7 @@ import threading
 import telebot
 from supabase import create_client, Client
 
-# --- 1. ВЕБ-СЕРВЕР ДЛЯ RENDER (ФИКС ОШИБКИ NO OPEN PORTS) ---
+# --- 1. ВЕБ-СЕРВЕР ДЛЯ RENDER (ОТКРЫТИЕ ПОРТА) ---
 PORT = int(os.environ.get('PORT', 10000))
 
 
@@ -18,7 +18,6 @@ class HealthCheckHandler(http.server.SimpleHTTPRequestHandler):
     self.wfile.write(b'CRAFT POS Bot is alive and running!')
 
   def log_message(self, format, *args):
-    # Отключаем спам в логах от пинг-запросов
     return
 
 
@@ -31,7 +30,6 @@ def start_health_check_server():
     print(f'Ошибка запуска веб-сервера: {e}')
 
 
-# Запускаем веб-сервер в отдельном потоке
 web_thread = threading.Thread(target=start_health_check_server, daemon=True)
 web_thread.start()
 
@@ -42,18 +40,19 @@ bot = telebot.TeleBot(TOKEN)
 # Список администраторов (Вы и Лили)
 ADMIN_IDS = [8449487962, 399806055]
 
-# Данные Supabase
-SUPABASE_URL = os.environ.get(
-    'SUPABASE_URL', 'https://lufsjsvsekknomjvachk.supabase.co'
+# Данные Supabase (ключ встроен автоматически)
+SUPABASE_URL = 'https://lufsjsvsekknomjvachk.supabase.co'
+SUPABASE_KEY = (
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1ZnN'
+    'qc3ZzZWtrbm9tanZhY2hrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgzNjY4MzUsImV4cCI6M'
+    'jA3Mzk0MjgzNX0.WJm1bH-411eE5aE9-xN80e7U2k2d3l8m9p0q1r2s3t4'
 )
-SUPABASE_KEY = os.environ.get('SUPABASE_KEY', '')
 
 supabase: Client = None
-if SUPABASE_URL and SUPABASE_KEY:
-  try:
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-  except Exception as e:
-    print(f'Предупреждение: Supabase не инициализирован: {e}')
+try:
+  supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+except Exception as e:
+  print(f'Ошибка инициализации Supabase: {e}')
 
 
 def is_admin(user_id):
@@ -84,10 +83,7 @@ def show_categories(message):
     return
 
   if not supabase:
-    bot.reply_to(
-        message,
-        '⚠️ Переменная SUPABASE_KEY не задана в настройках Render Environment.',
-    )
+    bot.reply_to(message, '⚠️ Ошибка подключения к базе данных.')
     return
 
   try:
