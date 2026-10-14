@@ -5,7 +5,7 @@ from flask import Flask
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-print('Инициализация скрипта бота...', flush=True)
+print("Инициализация скрипта бота...", flush=True)
 
 # ----------------------------------------------------
 # 1. Веб-сервер Flask для бесплатного тарифа Render
@@ -75,11 +75,14 @@ def send_welcome(message):
 
 
 # ----------------------------------------------------
-# 3. Запуск Long Polling
+# 3. Запуск Long Polling с защитой от конфликтов 409
 # ----------------------------------------------------
 if __name__ == '__main__':
   print('Запуск polling Telegram API...', flush=True)
   try:
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+    # remove_pending_updates=True принудительно сбрасывает зависшие сессии на серверах Telegram
+    bot.infinity_polling(
+        timeout=10, long_polling_timeout=5, remove_pending_updates=True
+    )
   except Exception as e:
     print(f'Ошибка в polling: {e}', flush=True)
