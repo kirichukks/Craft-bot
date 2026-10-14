@@ -36,7 +36,7 @@ bot = telebot.TeleBot(TOKEN)
 SUPER_ADMIN_ID = 8449487962 
 
 SUPABASE_URL = 'https://lufsjsvsekknomjvachk.supabase.co'
-SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imx1ZnNqc3ZzZWtrbm9tanZhY2hrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTgzNjY4MzUsImV4cCI6MjA3Mzk0MjgzNX0.WJm1bH-411eE5aE9-xN80e7U2k2d3l8m9p0q1r2s3t4'
+SUPABASE_KEY = 'sb_publishable_oVdER-aUXCAcpcJ5VMIUHw_xZ2n4NCa'
 
 supabase: Client = None
 try:
@@ -141,7 +141,6 @@ def list_users(message):
             uname = u.get('username') or "нет"
             status = u.get('status')
 
-            # Пропускаем главного админа в списке на удаление
             if uid == SUPER_ADMIN_ID:
                 continue
 
@@ -152,7 +151,7 @@ def list_users(message):
             
             bot.send_message(message.chat.id, text, reply_markup=markup, parse_mode='Markdown')
 
-        bot.send_message(message.chat.id, "📋 Выше представлен список всех сотрудников. Для удаления просто нажмите кнопку под карточкой пользователя.")
+        bot.send_message(message.chat.id, "📋 Список сотрудников выше. Для удаления просто нажмите кнопку под карточкой.")
     except Exception as e:
         bot.reply_to(message, f"❌ Ошибка: {e}")
 
@@ -165,7 +164,6 @@ def handle_callbacks(call):
 
     data = call.data
 
-    # 1. Разрешить доступ
     if data.startswith('allow_'):
         target_id = int(data.split('_')[1])
         try:
@@ -179,7 +177,6 @@ def handle_callbacks(call):
         except Exception as e:
             bot.answer_callback_query(call.id, f"Ошибка: {e}")
 
-    # 2. Отклонить доступ
     elif data.startswith('deny_'):
         target_id = int(data.split('_')[1])
         try:
@@ -190,7 +187,6 @@ def handle_callbacks(call):
         except Exception as e:
             bot.answer_callback_query(call.id, f"Ошибка: {e}")
 
-    # 3. Удалить пользователя через меню
     elif data.startswith('del_'):
         target_id = int(data.split('_')[1])
         try:
