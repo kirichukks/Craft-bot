@@ -47,6 +47,12 @@ if not TOKEN:
 
 bot = telebot.TeleBot(TOKEN)
 
+# Принудительно сбрасываем любые зависшие вебхуки при старте
+try:
+  bot.remove_webhook()
+except Exception:
+  pass
+
 
 @bot.message_handler(commands=['start'])
 def send_welcome(message):
@@ -75,14 +81,11 @@ def send_welcome(message):
 
 
 # ----------------------------------------------------
-# 3. Запуск Long Polling с защитой от конфликтов 409
+# 3. Запуск Long Polling
 # ----------------------------------------------------
 if __name__ == '__main__':
   print('Запуск polling Telegram API...', flush=True)
   try:
-    # remove_pending_updates=True принудительно сбрасывает зависшие сессии на серверах Telegram
-    bot.infinity_polling(
-        timeout=10, long_polling_timeout=5, remove_pending_updates=True
-    )
+    bot.infinity_polling(timeout=10, long_polling_timeout=5)
   except Exception as e:
     print(f'Ошибка в polling: {e}', flush=True)
