@@ -1,57 +1,40 @@
 import os
 import sys
-from threading import Thread
-from flask import Flask
+from flask import Flask, request
 import telebot
 from telebot.types import InlineKeyboardButton, InlineKeyboardMarkup, WebAppInfo
 
-print("Инициализация скрипта бота...", flush=True)
+print('Инициализация вебхук-бота...', flush=True)
 
-# ----------------------------------------------------
-# 1. Веб-сервер Flask для бесплатного тарифа Render
-# ----------------------------------------------------
-app = Flask('')
-
-
-@app.route('/')
-def home():
-  return 'CRAFT POS Bot is alive!'
-
-
-def run():
-  port = int(os.environ.get('PORT', 8080))
-  app.run(host='0.0.0.0', port=port)
-
-
-def keep_alive():
-  t = Thread(target=run)
-  t.daemon = True
-  t.start()
-  print('Веб-сервер Flask запущен в фоне.', flush=True)
-
-
-# Запускаем фоновый веб-сервер
-keep_alive()
-
-# ----------------------------------------------------
-# 2. Инициализация Telegram Бота
-# ----------------------------------------------------
 TOKEN = os.environ.get('TELEGRAM_TOKEN')
 WEBAPP_URL = os.environ.get(
     'WEBAPP_URL', 'https://craft-pos-mobile.vercel.app'
 )
+RENDER_EXTERNAL_URL = os.environ.get('RENDER_EXTERNAL_URL')  # Render сам подставит URL
 
 if not TOKEN:
   print('КРИТИЧЕСКАЯ ОШИБКА: TELEGRAM_TOKEN не найден!', flush=True)
   sys.exit(1)
 
 bot = telebot.TeleBot(TOKEN)
+app = Flask('')
 
-# Принудительно сбрасываем любые зависшие вебхуки при старте
-try:
-  bot.remove_webhook()
-except Exception:
-  pass
+
+@app.route('/')
+def home():
+  return 'CRAFT POS Bot is alive (Webhook mode)!'
+
+
+# Маршрут, на который Telegram будет присылать сообщения
+@app.route(f'/{TOKEN}', methods=['POST'])
+def webhook():
+  if request.headers.get('content-type') == 'application/json':
+    json_string = request.get_data().decode('utf-8')
+    update = telebot.types.Update.de_json(json_string)
+    bot.process_new_updates([update])
+    return '', 200
+  else:
+    return 'Forbidden', 403
 
 
 @bot.message_handler(commands=['start'])
@@ -72,20 +55,18 @@ def send_welcome(message):
     bot.reply_to(
         message, welcome_text, reply_markup=markup, parse_mode='Markdown'
     )
-    print(
-        f'Успешно отправлен ответ на /start пользователю {message.from_user.id}',
-        flush=True,
-    )
   except Exception as e:
     print(f'Ошибка при обработке /start: {e}', flush=True)
 
 
-# ----------------------------------------------------
-# 3. Запуск Long Polling
-# ----------------------------------------------------
 if __name__ == '__main__':
-  print('Запуск polling Telegram API...', flush=True)
-  try:
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
-  except Exception as e:
-    print(f'Ошибка в polling: {e}', flush=True)
+  # Автоматически устанавливаем вебхук на адрес вашего сервиса в Render
+  if RENDER_EXTERNAL_URL:
+    webhook_url = f'{RENDER_EXTERNAL_URL}/{TOKEN}'
+    bot.remove_webhook()
+    bot.set_webhook(url=webhook_url)
+    print(f'Вебхук успешно установлен на: {webhook_url}', flush=True)
+
+  # Запуск Flask-сервера на порту Render
+  port = int(os.environ.get('PORT', 10000))
+  app.run(host='0.0.0.0', port=port)
